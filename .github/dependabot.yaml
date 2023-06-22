@@ -1,0 +1,9 @@
+version: 2
+updates:
+  - package-ecosystem: "gradle"
+    target-branch: "deps"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    labels:
+      - "dependencies"
