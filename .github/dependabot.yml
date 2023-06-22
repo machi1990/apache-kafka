@@ -6,6 +6,15 @@ updates:
       interval: daily
       time: "13:45"
       timezone: Europe/Paris
-    open-pull-requests-limit: 4
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+  - package-ecosystem: gradle
+    directory: "/gradle"
+    schedule:
+      interval: daily
+      time: "12:50"
+      timezone: Europe/Paris
+    open-pull-requests-limit: 2
     labels:
       - "dependencies"
