@@ -1,20 +1,11 @@
 version: 2
 updates:
   - package-ecosystem: gradle
-    directory: "/gradle"
-    schedule:
-      interval: daily
-      time: "13:45"
-      timezone: Europe/Paris
-    open-pull-requests-limit: 2
-    labels:
-      - "dependencies"
-  - package-ecosystem: gradle
     directory: "/"
     schedule:
       interval: daily
-      time: "14:05"
+      time: "14:06"
       timezone: Europe/Paris
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 10
     labels:
       - "dependencies"
