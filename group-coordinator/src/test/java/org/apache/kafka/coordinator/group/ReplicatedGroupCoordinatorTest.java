@@ -18,6 +18,8 @@ package org.apache.kafka.coordinator.group;
 
 import org.apache.kafka.common.message.ConsumerGroupHeartbeatRequestData;
 import org.apache.kafka.common.message.ConsumerGroupHeartbeatResponseData;
+import org.apache.kafka.common.message.OffsetCommitRequestData;
+import org.apache.kafka.common.message.OffsetCommitResponseData;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.requests.RequestContext;
 import org.apache.kafka.coordinator.group.generated.ConsumerGroupCurrentMemberAssignmentKey;
@@ -32,6 +34,10 @@ import org.apache.kafka.coordinator.group.generated.ConsumerGroupTargetAssignmen
 import org.apache.kafka.coordinator.group.generated.ConsumerGroupTargetAssignmentMemberValue;
 import org.apache.kafka.coordinator.group.generated.ConsumerGroupTargetAssignmentMetadataKey;
 import org.apache.kafka.coordinator.group.generated.ConsumerGroupTargetAssignmentMetadataValue;
+import org.apache.kafka.coordinator.group.generated.GroupMetadataKey;
+import org.apache.kafka.coordinator.group.generated.GroupMetadataValue;
+import org.apache.kafka.coordinator.group.generated.OffsetCommitKey;
+import org.apache.kafka.coordinator.group.generated.OffsetCommitValue;
 import org.apache.kafka.coordinator.group.runtime.CoordinatorResult;
 import org.apache.kafka.image.MetadataImage;
 import org.apache.kafka.server.common.ApiMessageAndVersion;
@@ -54,8 +60,10 @@ public class ReplicatedGroupCoordinatorTest {
     @Test
     public void testConsumerGroupHeartbeat() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         RequestContext context = requestContext(ApiKeys.CONSUMER_GROUP_HEARTBEAT);
@@ -74,10 +82,85 @@ public class ReplicatedGroupCoordinatorTest {
     }
 
     @Test
+    public void testCommitOffset() {
+        GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
+        ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
+            groupMetadataManager,
+            offsetMetadataManager
+        );
+
+        RequestContext context = requestContext(ApiKeys.OFFSET_COMMIT);
+        OffsetCommitRequestData request = new OffsetCommitRequestData();
+        CoordinatorResult<OffsetCommitResponseData, Record> result = new CoordinatorResult<>(
+            Collections.emptyList(),
+            new OffsetCommitResponseData()
+        );
+
+        when(coordinator.commitOffset(
+            context,
+            request
+        )).thenReturn(result);
+
+        assertEquals(result, coordinator.commitOffset(context, request));
+    }
+
+    @Test
+    public void testReplayOffsetCommit() {
+        GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
+        ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
+            groupMetadataManager,
+            offsetMetadataManager
+        );
+
+        OffsetCommitKey key = new OffsetCommitKey();
+        OffsetCommitValue value = new OffsetCommitValue();
+
+        coordinator.replay(new Record(
+            new ApiMessageAndVersion(key, (short) 0),
+            new ApiMessageAndVersion(value, (short) 0)
+        ));
+
+        coordinator.replay(new Record(
+            new ApiMessageAndVersion(key, (short) 1),
+            new ApiMessageAndVersion(value, (short) 0)
+        ));
+
+        verify(offsetMetadataManager, times(2)).replay(key, value);
+    }
+
+    @Test
+    public void testReplayOffsetCommitWithNullValue() {
+        GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
+        ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
+            groupMetadataManager,
+            offsetMetadataManager
+        );
+
+        OffsetCommitKey key = new OffsetCommitKey();
+
+        coordinator.replay(new Record(
+            new ApiMessageAndVersion(key, (short) 0),
+            null
+        ));
+
+        coordinator.replay(new Record(
+            new ApiMessageAndVersion(key, (short) 1),
+            null
+        ));
+
+        verify(offsetMetadataManager, times(2)).replay(key, null);
+    }
+
+    @Test
     public void testReplayConsumerGroupMetadata() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         ConsumerGroupMetadataKey key = new ConsumerGroupMetadataKey();
@@ -94,8 +177,10 @@ public class ReplicatedGroupCoordinatorTest {
     @Test
     public void testReplayConsumerGroupMetadataWithNullValue() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         ConsumerGroupMetadataKey key = new ConsumerGroupMetadataKey();
@@ -111,8 +196,10 @@ public class ReplicatedGroupCoordinatorTest {
     @Test
     public void testReplayConsumerGroupPartitionMetadata() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         ConsumerGroupPartitionMetadataKey key = new ConsumerGroupPartitionMetadataKey();
@@ -129,8 +216,10 @@ public class ReplicatedGroupCoordinatorTest {
     @Test
     public void testReplayConsumerGroupPartitionMetadataWithNullValue() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         ConsumerGroupPartitionMetadataKey key = new ConsumerGroupPartitionMetadataKey();
@@ -146,8 +235,10 @@ public class ReplicatedGroupCoordinatorTest {
     @Test
     public void testReplayConsumerGroupMemberMetadata() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         ConsumerGroupMemberMetadataKey key = new ConsumerGroupMemberMetadataKey();
@@ -164,8 +255,10 @@ public class ReplicatedGroupCoordinatorTest {
     @Test
     public void testReplayConsumerGroupMemberMetadataWithNullValue() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         ConsumerGroupMemberMetadataKey key = new ConsumerGroupMemberMetadataKey();
@@ -181,8 +274,10 @@ public class ReplicatedGroupCoordinatorTest {
     @Test
     public void testReplayConsumerGroupTargetAssignmentMetadata() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         ConsumerGroupTargetAssignmentMetadataKey key = new ConsumerGroupTargetAssignmentMetadataKey();
@@ -199,8 +294,10 @@ public class ReplicatedGroupCoordinatorTest {
     @Test
     public void testReplayConsumerGroupTargetAssignmentMetadataWithNullValue() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         ConsumerGroupTargetAssignmentMetadataKey key = new ConsumerGroupTargetAssignmentMetadataKey();
@@ -216,8 +313,10 @@ public class ReplicatedGroupCoordinatorTest {
     @Test
     public void testReplayConsumerGroupTargetAssignmentMember() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         ConsumerGroupTargetAssignmentMemberKey key = new ConsumerGroupTargetAssignmentMemberKey();
@@ -234,8 +333,10 @@ public class ReplicatedGroupCoordinatorTest {
     @Test
     public void testReplayConsumerGroupTargetAssignmentMemberKeyWithNullValue() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         ConsumerGroupTargetAssignmentMemberKey key = new ConsumerGroupTargetAssignmentMemberKey();
@@ -251,8 +352,10 @@ public class ReplicatedGroupCoordinatorTest {
     @Test
     public void testReplayConsumerGroupCurrentMemberAssignment() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         ConsumerGroupCurrentMemberAssignmentKey key = new ConsumerGroupCurrentMemberAssignmentKey();
@@ -269,8 +372,10 @@ public class ReplicatedGroupCoordinatorTest {
     @Test
     public void testReplayConsumerGroupCurrentMemberAssignmentWithNullValue() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         ConsumerGroupCurrentMemberAssignmentKey key = new ConsumerGroupCurrentMemberAssignmentKey();
@@ -286,8 +391,10 @@ public class ReplicatedGroupCoordinatorTest {
     @Test
     public void testReplayKeyCannotBeNull() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         assertThrows(NullPointerException.class, () -> coordinator.replay(new Record(null, null)));
@@ -296,8 +403,10 @@ public class ReplicatedGroupCoordinatorTest {
     @Test
     public void testReplayWithUnsupportedVersion() {
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         ConsumerGroupCurrentMemberAssignmentKey key = new ConsumerGroupCurrentMemberAssignmentKey();
@@ -313,8 +422,10 @@ public class ReplicatedGroupCoordinatorTest {
     public void testOnLoaded() {
         MetadataImage image = MetadataImage.EMPTY;
         GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
         ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
-            groupMetadataManager
+            groupMetadataManager,
+            offsetMetadataManager
         );
 
         coordinator.onLoaded(image);
@@ -325,5 +436,44 @@ public class ReplicatedGroupCoordinatorTest {
         );
 
         verify(groupMetadataManager, times(1)).onLoaded();
+    }
+
+    @Test
+    public void testReplayGroupMetadata() {
+        GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
+        ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
+            groupMetadataManager,
+            offsetMetadataManager
+        );
+
+        GroupMetadataKey key = new GroupMetadataKey();
+        GroupMetadataValue value = new GroupMetadataValue();
+
+        coordinator.replay(new Record(
+            new ApiMessageAndVersion(key, (short) 2),
+            new ApiMessageAndVersion(value, (short) 4)
+        ));
+
+        verify(groupMetadataManager, times(1)).replay(key, value);
+    }
+
+    @Test
+    public void testReplayGroupMetadataWithNullValue() {
+        GroupMetadataManager groupMetadataManager = mock(GroupMetadataManager.class);
+        OffsetMetadataManager offsetMetadataManager = mock(OffsetMetadataManager.class);
+        ReplicatedGroupCoordinator coordinator = new ReplicatedGroupCoordinator(
+            groupMetadataManager,
+            offsetMetadataManager
+        );
+
+        GroupMetadataKey key = new GroupMetadataKey();
+
+        coordinator.replay(new Record(
+            new ApiMessageAndVersion(key, (short) 2),
+            null
+        ));
+
+        verify(groupMetadataManager, times(1)).replay(key, null);
     }
 }

@@ -16,8 +16,16 @@
  */
 package org.apache.kafka.coordinator.group;
 
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.message.ConsumerGroupHeartbeatRequestData;
 import org.apache.kafka.common.message.ConsumerGroupHeartbeatResponseData;
+import org.apache.kafka.common.message.JoinGroupRequestData;
+import org.apache.kafka.common.message.JoinGroupResponseData;
+import org.apache.kafka.common.message.OffsetCommitRequestData;
+import org.apache.kafka.common.message.OffsetCommitResponseData;
+import org.apache.kafka.common.message.SyncGroupRequestData;
+import org.apache.kafka.common.message.SyncGroupResponseData;
+import org.apache.kafka.common.errors.ApiException;
 import org.apache.kafka.common.protocol.ApiMessage;
 import org.apache.kafka.common.requests.RequestContext;
 import org.apache.kafka.common.utils.LogContext;
@@ -34,6 +42,10 @@ import org.apache.kafka.coordinator.group.generated.ConsumerGroupTargetAssignmen
 import org.apache.kafka.coordinator.group.generated.ConsumerGroupTargetAssignmentMemberValue;
 import org.apache.kafka.coordinator.group.generated.ConsumerGroupTargetAssignmentMetadataKey;
 import org.apache.kafka.coordinator.group.generated.ConsumerGroupTargetAssignmentMetadataValue;
+import org.apache.kafka.coordinator.group.generated.GroupMetadataKey;
+import org.apache.kafka.coordinator.group.generated.GroupMetadataValue;
+import org.apache.kafka.coordinator.group.generated.OffsetCommitKey;
+import org.apache.kafka.coordinator.group.generated.OffsetCommitValue;
 import org.apache.kafka.coordinator.group.runtime.Coordinator;
 import org.apache.kafka.coordinator.group.runtime.CoordinatorBuilder;
 import org.apache.kafka.coordinator.group.runtime.CoordinatorResult;
@@ -42,6 +54,8 @@ import org.apache.kafka.image.MetadataDelta;
 import org.apache.kafka.image.MetadataImage;
 import org.apache.kafka.server.common.ApiMessageAndVersion;
 import org.apache.kafka.timeline.SnapshotRegistry;
+
+import java.util.concurrent.CompletableFuture;
 
 /**
  * The group coordinator replicated state machine that manages the metadata of all generic and
@@ -59,8 +73,9 @@ public class ReplicatedGroupCoordinator implements Coordinator<Record> {
         private final GroupCoordinatorConfig config;
         private LogContext logContext;
         private SnapshotRegistry snapshotRegistry;
+        private TopicPartition topicPartition;
         private Time time;
-        private CoordinatorTimer<Record> timer;
+        private CoordinatorTimer<Void, Record> timer;
 
         public Builder(
             GroupCoordinatorConfig config
@@ -86,7 +101,7 @@ public class ReplicatedGroupCoordinator implements Coordinator<Record> {
 
         @Override
         public CoordinatorBuilder<ReplicatedGroupCoordinator, Record> withTimer(
-            CoordinatorTimer<Record> timer
+            CoordinatorTimer<Void, Record> timer
         ) {
             this.timer = timer;
             return this;
@@ -101,6 +116,14 @@ public class ReplicatedGroupCoordinator implements Coordinator<Record> {
         }
 
         @Override
+        public CoordinatorBuilder<ReplicatedGroupCoordinator, Record> withTopicPartition(
+            TopicPartition topicPartition
+        ) {
+            this.topicPartition = topicPartition;
+            return this;
+        }
+
+        @Override
         public ReplicatedGroupCoordinator build() {
             if (logContext == null) logContext = new LogContext();
             if (config == null)
@@ -111,17 +134,35 @@ public class ReplicatedGroupCoordinator implements Coordinator<Record> {
                 throw new IllegalArgumentException("Time must be set.");
             if (timer == null)
                 throw new IllegalArgumentException("Timer must be set.");
+            if (topicPartition == null)
+                throw new IllegalArgumentException("TopicPartition must be set.");
+
+            GroupMetadataManager groupMetadataManager = new GroupMetadataManager.Builder()
+                .withLogContext(logContext)
+                .withSnapshotRegistry(snapshotRegistry)
+                .withTime(time)
+                .withTimer(timer)
+                .withTopicPartition(topicPartition)
+                .withAssignors(config.consumerGroupAssignors)
+                .withConsumerGroupMaxSize(config.consumerGroupMaxSize)
+                .withConsumerGroupHeartbeatInterval(config.consumerGroupHeartbeatIntervalMs)
+                .withGenericGroupInitialRebalanceDelayMs(config.genericGroupInitialRebalanceDelayMs)
+                .withGenericGroupNewMemberJoinTimeoutMs(config.genericGroupNewMemberJoinTimeoutMs)
+                .withGenericGroupMinSessionTimeoutMs(config.genericGroupMinSessionTimeoutMs)
+                .withGenericGroupMaxSessionTimeoutMs(config.genericGroupMaxSessionTimeoutMs)
+                .build();
+
+            OffsetMetadataManager offsetMetadataManager = new OffsetMetadataManager.Builder()
+                .withLogContext(logContext)
+                .withSnapshotRegistry(snapshotRegistry)
+                .withTime(time)
+                .withGroupMetadataManager(groupMetadataManager)
+                .withOffsetMetadataMaxSize(config.offsetMetadataMaxSize)
+                .build();
 
             return new ReplicatedGroupCoordinator(
-                new GroupMetadataManager.Builder()
-                    .withLogContext(logContext)
-                    .withSnapshotRegistry(snapshotRegistry)
-                    .withTime(time)
-                    .withTimer(timer)
-                    .withAssignors(config.consumerGroupAssignors)
-                    .withConsumerGroupMaxSize(config.consumerGroupMaxSize)
-                    .withConsumerGroupHeartbeatInterval(config.consumerGroupHeartbeatIntervalMs)
-                    .build()
+                groupMetadataManager,
+                offsetMetadataManager
             );
         }
     }
@@ -132,14 +173,22 @@ public class ReplicatedGroupCoordinator implements Coordinator<Record> {
     private final GroupMetadataManager groupMetadataManager;
 
     /**
+     * The offset metadata manager.
+     */
+    private final OffsetMetadataManager offsetMetadataManager;
+
+    /**
      * Constructor.
      *
-     * @param groupMetadataManager The group metadata manager.
+     * @param groupMetadataManager  The group metadata manager.
+     * @param offsetMetadataManager The offset metadata manager.
      */
     ReplicatedGroupCoordinator(
-        GroupMetadataManager groupMetadataManager
+        GroupMetadataManager groupMetadataManager,
+        OffsetMetadataManager offsetMetadataManager
     ) {
         this.groupMetadataManager = groupMetadataManager;
+        this.offsetMetadataManager = offsetMetadataManager;
     }
 
     /**
@@ -159,6 +208,64 @@ public class ReplicatedGroupCoordinator implements Coordinator<Record> {
     }
 
     /**
+     * Handles a JoinGroup request.
+     *
+     * @param context The request context.
+     * @param request The actual JoinGroup request.
+     *
+     * @return A Result containing the JoinGroup response and
+     *         a list of records to update the state machine.
+     */
+    public CoordinatorResult<Void, Record> genericGroupJoin(
+        RequestContext context,
+        JoinGroupRequestData request,
+        CompletableFuture<JoinGroupResponseData> responseFuture
+    ) {
+        return groupMetadataManager.genericGroupJoin(
+            context,
+            request,
+            responseFuture
+        );
+    }
+
+    /**
+     * Handles a SyncGroup request.
+     *
+     * @param context The request context.
+     * @param request The actual SyncGroup request.
+     *
+     * @return A Result containing the SyncGroup response and
+     *         a list of records to update the state machine.
+     */
+    public CoordinatorResult<Void, Record> genericGroupSync(
+        RequestContext context,
+        SyncGroupRequestData request,
+        CompletableFuture<SyncGroupResponseData> responseFuture
+    ) {
+        return groupMetadataManager.genericGroupSync(
+            context,
+            request,
+            responseFuture
+        );
+    }
+
+    /**
+     * Handles a OffsetCommit request.
+     *
+     * @param context The request context.
+     * @param request The actual OffsetCommit request.
+     *
+     * @return A Result containing the OffsetCommitResponse response and
+     *         a list of records to update the state machine.
+     */
+    public CoordinatorResult<OffsetCommitResponseData, Record> commitOffset(
+        RequestContext context,
+        OffsetCommitRequestData request
+    ) throws ApiException {
+        return offsetMetadataManager.commitOffset(context, request);
+    }
+
+    /**
      * The coordinator has been loaded. This is used to apply any
      * post loading operations (e.g. registering timers).
      *
@@ -166,7 +273,10 @@ public class ReplicatedGroupCoordinator implements Coordinator<Record> {
      */
     @Override
     public void onLoaded(MetadataImage newImage) {
-        groupMetadataManager.onNewMetadataImage(newImage, new MetadataDelta(newImage));
+        MetadataDelta emptyDelta = new MetadataDelta(newImage);
+        groupMetadataManager.onNewMetadataImage(newImage, emptyDelta);
+        offsetMetadataManager.onNewMetadataImage(newImage, emptyDelta);
+
         groupMetadataManager.onLoaded();
     }
 
@@ -179,6 +289,7 @@ public class ReplicatedGroupCoordinator implements Coordinator<Record> {
     @Override
     public void onNewMetadataImage(MetadataImage newImage, MetadataDelta delta) {
         groupMetadataManager.onNewMetadataImage(newImage, delta);
+        offsetMetadataManager.onNewMetadataImage(newImage, delta);
     }
 
     /**
@@ -204,6 +315,21 @@ public class ReplicatedGroupCoordinator implements Coordinator<Record> {
         ApiMessageAndVersion value = record.value();
 
         switch (key.version()) {
+            case 0:
+            case 1:
+                offsetMetadataManager.replay(
+                    (OffsetCommitKey) key.message(),
+                    (OffsetCommitValue) messageOrNull(value)
+                );
+                break;
+
+            case 2:
+                groupMetadataManager.replay(
+                    (GroupMetadataKey) key.message(),
+                    (GroupMetadataValue) messageOrNull(value)
+                );
+                break;
+
             case 3:
                 groupMetadataManager.replay(
                     (ConsumerGroupMetadataKey) key.message(),
